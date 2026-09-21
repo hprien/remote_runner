@@ -169,7 +169,6 @@ ExecStart=/usr/local/bin/remote-runner \
     -server-cert /etc/remote-runner/server.crt \
     -server-key /etc/remote-runner/server.key \
     -client-cert /etc/remote-runner/client.crt \
-    -max-concurrent 4
 Restart=on-failure
 
 # hardening
@@ -177,7 +176,8 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/remote-runner
+StateDirectory=remote-runner
+ReadWritePaths=/etc/remote-runner
 CapabilityBoundingSet=
 AmbientCapabilities=
 
