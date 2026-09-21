@@ -2,7 +2,7 @@
 
 Runs predefined scripts triggered via a REST API call.
 
-remote_runner is a Go webserver that executes predefined, 
+remote-runner is a Go webserver that executes predefined, 
 scripts over a mutually authenticated TLS 1.3 connection.
 Results are either streamed to the client
 and/or delivered to a webhook.
@@ -10,7 +10,7 @@ and/or delivered to a webhook.
 ## Building
 
 ```console
-$ go build -o remote_runner .
+$ go build -o remote-runner .
 ```
 
 ## Configuration
@@ -36,7 +36,7 @@ All settings are command line flags:
 
 ## Certificates
 
-remote_runner authenticates itself with a self-signed server certificate and
+remote-runner authenticates itself with a self-signed server certificate and
 authenticates users with a self-signed client certificate. Certificates are
 **not** validated against a CA — they are **pinned**: a connection is only
 accepted if the certificate presented by the peer is byte-identical to the
@@ -153,14 +153,14 @@ scripts. Then create `/etc/systemd/system/remote-runner.service`:
 
 ```ini
 [Unit]
-Description=remote_runner - run predefined scripts via REST API
+Description=remote-runner - run predefined scripts via REST API
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 User=remote-runner
 Group=remote-runner
-ExecStart=/usr/local/bin/remote_runner \
+ExecStart=/usr/local/bin/remote-runner \
     -listen :8443 \
     -scripts-dir /var/lib/remote-runner/scripts \
     -server-cert /etc/remote-runner/server.crt \
@@ -189,7 +189,7 @@ WantedBy=multi-user.target
 
 ## Logging
 
-remote_runner logs structured key=value lines to stderr, which journald
+remote-runner logs structured key=value lines to stderr, which journald
 captures when it runs as the service above. View them with:
 
 ```console
