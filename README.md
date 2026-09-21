@@ -144,10 +144,13 @@ Create a dedicated user without login shell and a home for the scripts:
 ```console
 $ useradd --system --home-dir /var/lib/remote-runner --create-home \
     --shell /usr/sbin/nologin remote-runner
-$ sudo -u remote-runner mkdir /var/lib/remote-runner/scripts
+$ mkdir /var/lib/remote-runner/scripts
+$ chown -R root:remote-runner /var/lib/remote-runner/scripts
+$ chmod 770 /var/lib/remote-runner/scripts
+$ chmod -R 750 /var/lib/remote-runner/scripts/*
 $ cp remote-runner /usr/local/bin
 $ chmod 700 /usr/local/bin/remote-runner
-$ nano visudo
+$ sudo visudo
 # add `remote-runner ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt update, /usr/bin/apt upgrade -y, /usr/bin/apt autoremove`
 ```
 
@@ -168,18 +171,24 @@ ExecStart=/usr/local/bin/remote-runner \
     -scripts-dir /var/lib/remote-runner/scripts \
     -server-cert /etc/remote-runner/server.crt \
     -server-key /etc/remote-runner/server.key \
-    -client-cert /etc/remote-runner/client.crt \
+    -client-cert /etc/remote-runner/client.crt
 Restart=on-failure
 
 # hardening
-NoNewPrivileges=true
-ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 StateDirectory=remote-runner
-ReadWritePaths=/etc/remote-runner
-CapabilityBoundingSet=
-AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
