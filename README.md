@@ -46,10 +46,11 @@ refused at the handshake).
 ### Create a certificate and key
 
 ```console
-$ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+$ openssl req -x509 -newkey ed25519 \
     -keyout server.key -out server.crt -days 3650 -nodes \
     -subj "/CN=remote-runner"
 ```
+[Check curve security](https://safecurves.cr.yp.to/)
 
 ### Calling the API
 
