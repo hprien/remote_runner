@@ -55,10 +55,10 @@ $ openssl req -x509 -newkey ed25519 \
 ### Calling the API
 
 ```console
-$ curl --tlsv1.3 \
+$ curl -i --tlsv1.3 \
     --cert client.crt --key client.key \
     --cacert server.crt \
-    --data @request.json \
+    --data '{"script_name":"hello","script_checksum":"99647781e902f1de358822b26692771cedadd972c5fd83f9421a39464572d444","stream_script_stdout_stderr":true,"script_timeout_seconds":60}' \
     https://remote-runner.example:8443/run
 ```
 
