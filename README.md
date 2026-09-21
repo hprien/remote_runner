@@ -142,10 +142,13 @@ A `return_code` of `-1` means the script was terminated because
 Create a dedicated user without login shell and a home for the scripts:
 
 ```console
-# useradd --system --home-dir /var/lib/remote-runner --create-home \
+$ useradd --system --home-dir /var/lib/remote-runner --create-home \
     --shell /usr/sbin/nologin remote-runner
-# sudo -u remote-runner mkdir /var/lib/remote-runner/scripts
-# install -o remote-runner -g remote-runner -m 0755 remote_runner /usr/local/bin/remote_runner
+$ sudo -u remote-runner mkdir /var/lib/remote-runner/scripts
+$ cp remote-runner /usr/local/bin
+$ chmod 700 /usr/local/bin/remote-runner
+$ nano visudo
+# add `remote-runner ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt update, /usr/bin/apt upgrade -y, /usr/bin/apt autoremove`
 ```
 
 Install the certificates (owned by root, readable by remote_runner) and the
