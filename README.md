@@ -185,9 +185,17 @@ $ chmod 700 /usr/local/bin/remote-runner
 $ chmod 700 /usr/local/bin/task-helper
 ```
 
-Install the certificates (owned by root, readable by remote_runner) and the
-scripts. Then create the task helper socket
-`/etc/systemd/system/task-helper.socket`:
+Install the certificates:
+
+```console
+$ mkdir /etc/remote-runner
+$ cp server.crt server.key client.crt /etc/remote-runner
+$ chown root:remote-runner /etc/remote-runner /etc/remote-runner/*
+$ chmod 750 /etc/remote-runner
+$ chmod 640 /etc/remote-runner/*
+```
+
+Then create the task helper socket `/etc/systemd/system/task-helper.socket`:
 
 ```ini
 [Unit]
