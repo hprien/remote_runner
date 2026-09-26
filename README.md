@@ -181,7 +181,9 @@ $ mkdir -p /var/lib/remote-runner/scripts
 $ chown -R root:root /var/lib/remote-runner/scripts
 $ chmod -R 750 /var/lib/remote-runner/scripts
 $ cp remote-runner task-helper /usr/local/bin
-$ chmod 700 /usr/local/bin/remote-runner
+$ chown root:remote-runner /usr/local/bin/remote-runner
+$ chmod 750 /usr/local/bin/remote-runner
+$ chown root:root /usr/local/bin/task-helper
 $ chmod 700 /usr/local/bin/task-helper
 ```
 
