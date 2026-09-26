@@ -64,7 +64,7 @@ func run() error {
 
 	logger.Info("remote_runner listening",
 		"addr", cfg.Listen,
-		"scripts_dir", cfg.ScriptsDir,
+		"task_socket", cfg.TaskSocket,
 		"max_concurrent", cfg.MaxConcurrent)
 	return srv.ListenAndServeTLS("", "")
 }

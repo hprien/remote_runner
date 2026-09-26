@@ -2,25 +2,45 @@
 
 Runs predefined scripts triggered via a REST API call.
 
-remote-runner is a Go webserver that executes predefined, 
-scripts over a mutually authenticated TLS 1.3 connection.
-Results are either streamed to the client
-and/or delivered to a webhook.
+remote-runner consists of two components:
+
+- **remote-runner** — an unprivileged Go webserver that receives requests over
+  a mutually authenticated TLS 1.3 connection, validates them and streams
+  results to the client and/or delivers them to a webhook. It executes
+  nothing itself.
+- **task-helper** — a root daemon that owns the scripts. It is started by
+  systemd socket activation, accepts exactly one connection peer (the
+  remote-runner user, verified via the socket permissions and SO_PEERCRED),
+  validates the script checksum and executes the requested script as root.
+
+```text
+client ── mTLS 1.3 (pinned certs) ──▶ remote-runner ── unix socket ──▶ task-helper ──▶ script (root)
+        ◀── NDJSON stream / webhook ──┘   (user: remote-runner)  │      (root owned scripts)
+                                                  socket: /run/remote-runner/task.sock
+                                                  mode 0660 root:remote-runner
+```
+
+The privilege boundary: whoever administers the root owned scripts directory
+administers root execution. The web daemon can trigger scripts and read their
+output — it can never read, modify or add script files.
 
 ## Building
 
 ```console
 $ go build -o remote-runner .
+$ go build -o task-helper ./task-helper
 ```
 
 ## Configuration
+
+### remote-runner
 
 All settings are command line flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-listen` | `:8443` | Listen address (host:port) |
-| `-scripts-dir` | `scripts` | Directory containing one folder per script |
+| `-task-socket` | — | Unix socket of the task helper (required) |
 | `-server-cert` | — | PEM server certificate (required) |
 | `-server-key` | — | PEM server key (required) |
 | `-client-cert` | — | PEM client certificate that is pinned for authentication (required) |
@@ -33,6 +53,19 @@ All settings are command line flags:
 | `-webhook-server-cert` | — | PEM certificate of the webhook server that is pinned |
 
 `-webhook-client-cert` and `-webhook-client-key` must be set together.
+
+### task-helper
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-scripts-dir` | `/var/lib/remote-runner/scripts` | Root owned directory containing one folder per script |
+| `-allowed-user` | `remote-runner` | The only user allowed to connect to the socket |
+| `-max-concurrent` | `4` | Maximum number of scripts running simultaneously |
+| `-max-script-timeout-seconds` | `3600` | Maximum allowed `script_timeout_seconds` per request |
+
+The helper refuses to start when it was not started via systemd socket
+activation, so the socket file and its permissions are always controlled by
+the socket unit.
 
 ## Certificates
 
@@ -64,11 +97,13 @@ $ curl -i --tlsv1.3 \
 
 ## Scripts
 
-Each script lives in its own folder inside `-scripts-dir` and must be an
-executable regular file (no symlinks) named after the folder:
+Each script lives in its own folder inside the task-helper's `-scripts-dir`
+and must be an executable regular file (no symlinks) named after the folder.
+Scripts run **as root**, so the directory must be owned and only writable by
+root:
 
 ```text
-scripts/
+/var/lib/remote-runner/scripts/
 └── hello/
     └── hello      (executable)
 ```
@@ -78,8 +113,6 @@ $ chmod +x scripts/hello/hello
 $ sha256sum scripts/hello/hello
 99647781e902f1de358822b26692771cedadd972c5fd83f9421a39464572d444  scripts/hello/hello
 ```
-
-The `script_checksum` of a request must match this SHA-256 checksum.
 
 ## API
 
@@ -139,42 +172,75 @@ A `return_code` of `-1` means the script was terminated because
 
 ## Run as a system service
 
-Create a dedicated user without login shell and a home for the scripts:
+Create a dedicated user without login shell and the scripts home:
 
 ```console
 $ useradd --system --home-dir /var/lib/remote-runner --create-home \
     --shell /usr/sbin/nologin remote-runner
-$ mkdir /var/lib/remote-runner/scripts
-$ chown -R root:remote-runner /var/lib/remote-runner/scripts
-$ chmod 770 /var/lib/remote-runner/scripts
-$ chmod -R 750 /var/lib/remote-runner/scripts/*
-$ cp remote-runner /usr/local/bin
+$ mkdir -p /var/lib/remote-runner/scripts
+$ chown -R root:root /var/lib/remote-runner/scripts
+$ chmod -R 750 /var/lib/remote-runner/scripts
+$ cp remote-runner task-helper /usr/local/bin
 $ chmod 700 /usr/local/bin/remote-runner
-$ sudo visudo
-# add `remote-runner ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt update, /usr/bin/apt upgrade -y, /usr/bin/apt autoremove`
+$ chmod 700 /usr/local/bin/task-helper
 ```
 
 Install the certificates (owned by root, readable by remote_runner) and the
-scripts. Then create `/etc/systemd/system/remote-runner.service`:
+scripts. Then create the task helper socket
+`/etc/systemd/system/task-helper.socket`:
+
+```ini
+[Unit]
+Description=remote-runner - task helper socket
+
+[Socket]
+ListenStream=/run/remote-runner/task.sock
+SocketUser=root
+SocketGroup=remote-runner
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target
+```
+
+and `/etc/systemd/system/task-helper.service`:
+
+```ini
+[Unit]
+Description=remote-runner - execute scripts as root for the web daemon
+
+[Service]
+ExecStart=/usr/local/bin/task-helper \
+    -scripts-dir /var/lib/remote-runner/scripts \
+    -allowed-user remote-runner
+Restart=on-failure
+
+[Install]
+WantedBy=sockets.target
+```
+
+Finally `/etc/systemd/system/remote-runner.service`:
 
 ```ini
 [Unit]
 Description=remote-runner - run predefined scripts via REST API
-After=network-online.target
+After=network-online.target task-helper.socket
 Wants=network-online.target
+Requires=task-helper.socket
 
 [Service]
 User=remote-runner
 Group=remote-runner
 ExecStart=/usr/local/bin/remote-runner \
     -listen :8443 \
-    -scripts-dir /var/lib/remote-runner/scripts \
+    -task-socket /run/remote-runner/task.sock \
     -server-cert /etc/remote-runner/server.crt \
     -server-key /etc/remote-runner/server.key \
     -client-cert /etc/remote-runner/client.crt
 Restart=on-failure
 
-# hardening
+# hardening — the web daemon spawns no processes and only reads certificates
+NoNewPrivileges=true
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
@@ -184,11 +250,11 @@ ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
+ProtectSystem=strict
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
-StateDirectory=remote-runner
 
 [Install]
 WantedBy=multi-user.target
@@ -196,18 +262,19 @@ WantedBy=multi-user.target
 
 ```console
 # systemctl daemon-reload
-# systemctl enable --now remote-runner
+# systemctl enable --now task-helper.socket remote-runner
 ```
 
 ## Logging
 
-remote-runner logs structured key=value lines to stderr, which journald
-captures when it runs as the service above. View them with:
+Both components log structured key=value lines to stderr, which journald
+captures when they run as the services above. View them with:
 
 ```console
 $ journalctl -u remote-runner -f                     # follow
 $ journalctl -u remote-runner --since "1 hour ago"
 $ journalctl -u remote-runner -g "security event"    # filter security events
+$ journalctl -u task-helper -f                       # root side: execution
 ```
 
 Every log line contains a `transaction_id` (UUIDv4) that ties all messages

@@ -10,23 +10,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
+
+	"remote_runner/internal/task"
 )
 
 // maxRequestBodySize bounds the accepted request body to prevent abuse.
 const maxRequestBodySize = 16 << 10
-
-// scriptNamePattern only allows plain names: no separators, no leading dot and
-// no "..". This makes path traversal via script_name impossible.
-var (
-	scriptNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
-	checksumPattern   = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
-)
 
 type server struct {
 	cfg           *config
@@ -35,6 +26,14 @@ type server struct {
 	slots         chan struct{}
 	webhookClient *http.Client
 }
+
+// scriptResult is the result of a finished script, filled by the task client
+// while the task helper streams the output.
+type scriptResult = task.Result
+
+// streamFunc is called with every output chunk a script produces. It is nil
+// when the client did not request streaming.
+type streamFunc = task.StreamFunc
 
 // runRequest is the API request body. Pointers are used to distinguish missing
 // from zero valued fields for required input validation.
@@ -62,7 +61,7 @@ type streamResponse struct {
 // certificate. It is the only authentication mechanism; no CA is involved.
 func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger := requestLogger(s.logger, newTransactionID(), r.RemoteAddr)
+		logger := requestLogger(s.logger, task.NewTransactionID(), r.RemoteAddr)
 
 		var peerCerts []*x509.Certificate
 		if r.TLS != nil {
@@ -78,10 +77,11 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// handleRun validates the request, starts the script and streams its output if
-// requested. Response objects are written as newline delimited JSON (NDJSON).
+// handleRun validates the request, asks the task helper to run the script and
+// streams its output if requested. Response objects are written as newline
+// delimited JSON (NDJSON).
 func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
-	logger := requestLogger(s.logger, newTransactionID(), r.RemoteAddr)
+	logger := requestLogger(s.logger, task.NewTransactionID(), r.RemoteAddr)
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
 	if err != nil {
@@ -116,27 +116,11 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scriptPath := filepath.Join(s.cfg.ScriptsDir, req.ScriptName, req.ScriptName)
-	info, err := os.Lstat(scriptPath)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		s.badRequest(logger, w, fmt.Sprintf("script %q is not available as executable", req.ScriptName))
-		return
-	}
-	sum, err := fileChecksum(scriptPath)
-	if err != nil {
-		s.badRequest(logger, w, err.Error())
-		return
-	}
-	if !strings.EqualFold(sum, req.ScriptChecksum) {
-		logger.Warn("security event: script checksum mismatch",
-			"event", "script_checksum_mismatch",
-			"script_name", req.ScriptName)
-		s.badRequest(logger, w, "script checksum mismatch")
-		return
-	}
-
 	// Reserve a concurrency slot without blocking; a full server denies the
-	// request instead of queueing it.
+	// request instead of queueing it. The slot is owned by this handler until
+	// the script started; the defer below releases it on every early return
+	// and on panics, so it can never leak. Once the script started, the
+	// background goroutine owns the slot and releases it when it finished.
 	select {
 	case s.slots <- struct{}{}:
 	default:
@@ -149,6 +133,49 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 			ScriptName: req.ScriptName,
 			Message:    "too many concurrent scripts",
 		})
+		return
+	}
+	started := false
+	defer func() {
+		if !started {
+			<-s.slots
+		}
+	}()
+
+	client, err := dialTaskClient(s.cfg.TaskSocket)
+	if err != nil {
+		s.internalError(logger, w, err)
+		return
+	}
+	first, err := client.start(task.Request{
+		ScriptName:     req.ScriptName,
+		ScriptChecksum: req.ScriptChecksum,
+		TimeoutSecs:    *req.ScriptTimeoutSecs,
+	})
+	if err != nil {
+		client.close()
+		s.internalError(logger, w, err)
+		return
+	}
+	if first.Type == task.EventRejected {
+		client.close()
+		if first.Reason == task.ReasonBusy {
+			logger.Warn("security event: too many concurrent scripts",
+				"event", "concurrency_limit_reached",
+				"script_name", req.ScriptName)
+			s.respond(logger, w, http.StatusOK, statusResponse{
+				Type:       "denied",
+				ScriptName: req.ScriptName,
+				Message:    "too many concurrent scripts",
+			})
+			return
+		}
+		s.badRequest(logger, w, first.Reason)
+		return
+	}
+	if first.Type != task.EventStarted {
+		client.close()
+		s.internalError(logger, w, fmt.Errorf("unexpected first task event %q", first.Type))
 		return
 	}
 
@@ -176,13 +203,16 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// The script runs in the background. When streaming is requested the
 	// handler stays open until the script finished, otherwise the response
-	// ends right here and the result is only delivered via webhook.
+	// ends right here and the result is only delivered via webhook. The
+	// goroutine owns the concurrency slot from here on.
+	started = true
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer func() { <-s.slots }()
+		defer client.close()
 
-		res := executeScript(logger, scriptPath, req.ScriptName,
+		res := client.stream(logger, req.ScriptName,
 			time.Duration(*req.ScriptTimeoutSecs)*time.Second, emit)
 
 		if req.WebhookURL != "" {
@@ -203,18 +233,14 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 // syntactic rules. It returns a descriptive error for the log; the client only
 // ever receives a plain "bad request".
 func validateRequest(cfg *config, req *runRequest) error {
-	if req.ScriptName == "" {
-		return errors.New("script_name is required")
-	}
-	if !scriptNamePattern.MatchString(req.ScriptName) {
-		return errors.New("script_name contains invalid characters")
+	if err := task.ValidateName(req.ScriptName); err != nil {
+		return err
 	}
 	if req.ScriptChecksum == "" {
 		return errors.New("script_checksum is required")
 	}
-	if !checksumPattern.MatchString(req.ScriptChecksum) {
-		return errors.New("script_checksum is not a valid sha256 hex checksum")
-	}
+	// The checksum format itself is validated by the task helper, which is
+	// the only component that reads the script file.
 	if req.StreamStdoutStderr == nil {
 		return errors.New("stream_script_stdout_stderr is required")
 	}
@@ -248,6 +274,14 @@ func (s *server) badRequest(logger *slog.Logger, w http.ResponseWriter, reason s
 	logger.Warn("security event: request rejected", "event", "bad_request", "reason", reason)
 	http.Error(w, "bad request", http.StatusBadRequest)
 	logger.Info("response", "status", http.StatusBadRequest, "response_message", "bad request")
+}
+
+// internalError responds with a plain "internal server error", e.g. when the
+// task helper is unreachable. The detailed reason is only written to the log.
+func (s *server) internalError(logger *slog.Logger, w http.ResponseWriter, err error) {
+	logger.Error("internal error", "error", err.Error())
+	http.Error(w, "internal server error", http.StatusInternalServerError)
+	logger.Info("response", "status", http.StatusInternalServerError, "response_message", "internal server error")
 }
 
 // respond writes one response object as a single NDJSON line and logs it.
