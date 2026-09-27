@@ -28,18 +28,48 @@ const requestReadTimeout = 10 * time.Second
 // streams its output back as NDJSON events.
 func handleConn(logger *slog.Logger, cfg *config, allowedUID uint32, slots chan struct{}, conn *net.UnixConn) {
 	defer conn.Close()
-	logger = logger.With("transaction_id", task.NewTransactionID())
 
 	peerUID, err := peerUID(conn)
 	if err != nil {
-		logger.Warn("security event: peer credentials unavailable", "event", "peer_creds_unavailable", "error", err.Error())
+		logger.Warn("security event: peer credentials unavailable",
+			"transaction_id", task.NewTransactionID(),
+			"event", "peer_creds_unavailable",
+			"error", err.Error())
 		return
 	}
-	logger = logger.With("peer_uid", peerUID)
 	if peerUID != allowedUID {
-		logger.Warn("security event: connection from unauthorized user", "event", "peer_not_allowed")
+		logger.Warn("security event: connection from unauthorized user",
+			"transaction_id", task.NewTransactionID(),
+			"peer_uid", peerUID,
+			"event", "peer_not_allowed")
 		return
 	}
+
+	req, err := readRequest(conn)
+	if err != nil {
+		logger.Warn("security event: request rejected",
+			"transaction_id", task.NewTransactionID(),
+			"peer_uid", peerUID,
+			"event", "task_rejected",
+			"reason", "unreadable request")
+		if err := writeEvent(conn, task.Event{Type: task.EventRejected, Reason: "unreadable request"}); err != nil {
+			logger.Error("write rejected event", "error", err.Error())
+		}
+		return
+	}
+
+	if !task.ValidTransactionID(req.TransactionID) {
+		logger.Warn("security event: request rejected",
+			"transaction_id", task.NewTransactionID(),
+			"peer_uid", peerUID,
+			"event", "task_rejected",
+			"reason", "invalid transaction id")
+		if err := writeEvent(conn, task.Event{Type: task.EventRejected, Reason: "invalid transaction id"}); err != nil {
+			logger.Error("write rejected event", "error", err.Error())
+		}
+		return
+	}
+	logger = logger.With("transaction_id", req.TransactionID, "peer_uid", peerUID)
 
 	reject := func(reason string) {
 		logger.Warn("security event: request rejected", "event", "task_rejected", "reason", reason)
@@ -48,14 +78,6 @@ func handleConn(logger *slog.Logger, cfg *config, allowedUID uint32, slots chan 
 		}
 	}
 
-	req, err := readRequest(conn)
-	if err != nil {
-		logger.Warn("security event: request rejected", "event", "task_rejected", "reason", "unreadable request")
-		if err := writeEvent(conn, task.Event{Type: task.EventRejected, Reason: "unreadable request"}); err != nil {
-			logger.Error("write rejected event", "error", err.Error())
-		}
-		return
-	}
 	logger.Info("request received",
 		"script_name", req.ScriptName,
 		"timeout_seconds", req.TimeoutSecs)

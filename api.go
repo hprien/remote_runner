@@ -81,7 +81,10 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 // streams its output if requested. Response objects are written as newline
 // delimited JSON (NDJSON).
 func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
-	logger := requestLogger(s.logger, task.NewTransactionID(), r.RemoteAddr)
+	// The transaction id is generated here and also forwarded to the
+	// remote-runner-execd, so both journals correlate one request.
+	tx := task.NewTransactionID()
+	logger := requestLogger(s.logger, tx, r.RemoteAddr)
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
 	if err != nil {
@@ -148,6 +151,7 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	first, err := client.start(task.Request{
+		TransactionID:  tx,
 		ScriptName:     req.ScriptName,
 		ScriptChecksum: req.ScriptChecksum,
 		TimeoutSecs:    *req.ScriptTimeoutSecs,
