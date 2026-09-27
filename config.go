@@ -9,7 +9,7 @@ import (
 // flags to keep the codebase minimal.
 type config struct {
 	Listen               string
-	TaskSocket           string
+	ExecdSocket          string
 	ServerCert           string
 	ServerKey            string
 	ClientCert           string
@@ -25,7 +25,7 @@ type config struct {
 func parseFlags() *config {
 	cfg := &config{}
 	flag.StringVar(&cfg.Listen, "listen", ":8443", "listen address (host:port)")
-	flag.StringVar(&cfg.TaskSocket, "task-socket", "", "unix socket of the task helper that executes the scripts")
+	flag.StringVar(&cfg.ExecdSocket, "execd-socket", "", "unix socket of remote-runner-execd that executes the scripts")
 	flag.StringVar(&cfg.ServerCert, "server-cert", "", "PEM encoded TLS server certificate (required)")
 	flag.StringVar(&cfg.ServerKey, "server-key", "", "PEM encoded TLS server key (required)")
 	flag.StringVar(&cfg.ClientCert, "client-cert", "", "PEM encoded client certificate that is pinned for authentication (required)")
@@ -45,8 +45,8 @@ func (c *config) validate() error {
 	if c.ServerCert == "" || c.ServerKey == "" || c.ClientCert == "" {
 		return errors.New("-server-cert, -server-key and -client-cert are required")
 	}
-	if c.TaskSocket == "" {
-		return errors.New("-task-socket is required")
+	if c.ExecdSocket == "" {
+		return errors.New("-execd-socket is required")
 	}
 	if (c.WebhookClientCert == "") != (c.WebhookClientKey == "") {
 		return errors.New("-webhook-client-cert and -webhook-client-key must be set together")

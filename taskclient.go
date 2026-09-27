@@ -15,17 +15,17 @@ import (
 // guards against a helper that crashed without sending the exit event.
 const taskStreamSlack = time.Minute
 
-// taskClient is one connection to the task helper socket.
+// taskClient is one connection to the remote-runner-execd socket.
 type taskClient struct {
 	conn *net.UnixConn
 	dec  *json.Decoder
 }
 
-// dialTaskClient connects to the task helper socket.
+// dialTaskClient connects to the remote-runner-execd socket.
 func dialTaskClient(path string) (*taskClient, error) {
 	conn, err := net.Dial("unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("dial task helper socket: %w", err)
+		return nil, fmt.Errorf("dial remote-runner-execd socket: %w", err)
 	}
 	return &taskClient{conn: conn.(*net.UnixConn), dec: json.NewDecoder(conn)}, nil
 }
@@ -91,7 +91,7 @@ func (c *taskClient) stream(logger *slog.Logger, scriptName string, timeout time
 	}
 }
 
-// close terminates the connection to the task helper.
+// close terminates the connection to the remote-runner-execd.
 func (c *taskClient) close() {
 	c.conn.Close()
 }

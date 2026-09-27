@@ -28,7 +28,7 @@ type server struct {
 }
 
 // scriptResult is the result of a finished script, filled by the task client
-// while the task helper streams the output.
+// while the remote-runner-execd streams the output.
 type scriptResult = task.Result
 
 // streamFunc is called with every output chunk a script produces. It is nil
@@ -77,7 +77,7 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// handleRun validates the request, asks the task helper to run the script and
+// handleRun validates the request, asks the remote-runner-execd to run the script and
 // streams its output if requested. Response objects are written as newline
 // delimited JSON (NDJSON).
 func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +142,7 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	client, err := dialTaskClient(s.cfg.TaskSocket)
+	client, err := dialTaskClient(s.cfg.ExecdSocket)
 	if err != nil {
 		s.internalError(logger, w, err)
 		return
@@ -239,7 +239,7 @@ func validateRequest(cfg *config, req *runRequest) error {
 	if req.ScriptChecksum == "" {
 		return errors.New("script_checksum is required")
 	}
-	// The checksum format itself is validated by the task helper, which is
+	// The checksum format itself is validated by the remote-runner-execd, which is
 	// the only component that reads the script file.
 	if req.StreamStdoutStderr == nil {
 		return errors.New("stream_script_stdout_stderr is required")
@@ -277,7 +277,7 @@ func (s *server) badRequest(logger *slog.Logger, w http.ResponseWriter, reason s
 }
 
 // internalError responds with a plain "internal server error", e.g. when the
-// task helper is unreachable. The detailed reason is only written to the log.
+// remote-runner-execd is unreachable. The detailed reason is only written to the log.
 func (s *server) internalError(logger *slog.Logger, w http.ResponseWriter, err error) {
 	logger.Error("internal error", "error", err.Error())
 	http.Error(w, "internal server error", http.StatusInternalServerError)

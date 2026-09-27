@@ -8,15 +8,15 @@ remote-runner consists of two components:
   a mutually authenticated TLS 1.3 connection, validates them and streams
   results to the client and/or delivers them to a webhook. It executes
   nothing itself.
-- **task-helper** — a root daemon that owns the scripts. It is started by
+- **remote-runner-execd** — a root daemon that owns the scripts. It is started by
   systemd socket activation, accepts exactly one connection peer (the
   remote-runner user, verified via the socket permissions and SO_PEERCRED),
   validates the script checksum and executes the requested script as root.
 
 ```text
-client ── mTLS 1.3 (pinned certs) ──▶ remote-runner ── unix socket ──▶ task-helper ──▶ script (root)
+client ── mTLS 1.3 (pinned certs) ──▶ remote-runner ── unix socket ──▶ remote-runner-execd ──▶ script (root)
         ◀── NDJSON stream / webhook ──┘   (user: remote-runner)  │      (root owned scripts)
-                                                  socket: /run/remote-runner/task.sock
+                                                  socket: /run/remote-runner/execd.sock
                                                   mode 0660 root:remote-runner
 ```
 
@@ -28,7 +28,7 @@ output — it can never read, modify or add script files.
 
 ```console
 $ go build -o remote-runner .
-$ go build -o task-helper ./task-helper
+$ go build -o remote-runner-execd ./execd
 ```
 
 ## Configuration
@@ -40,7 +40,7 @@ All settings are command line flags:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-listen` | `:8443` | Listen address (host:port) |
-| `-task-socket` | — | Unix socket of the task helper (required) |
+| `-execd-socket` | — | Unix socket of remote-runner-execd (required) |
 | `-server-cert` | — | PEM server certificate (required) |
 | `-server-key` | — | PEM server key (required) |
 | `-client-cert` | — | PEM client certificate that is pinned for authentication (required) |
@@ -54,7 +54,7 @@ All settings are command line flags:
 
 `-webhook-client-cert` and `-webhook-client-key` must be set together.
 
-### task-helper
+### remote-runner-execd
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -63,7 +63,7 @@ All settings are command line flags:
 | `-max-concurrent` | `4` | Maximum number of scripts running simultaneously |
 | `-max-script-timeout-seconds` | `3600` | Maximum allowed `script_timeout_seconds` per request |
 
-The helper refuses to start when it was not started via systemd socket
+remote-runner-execd refuses to start when it was not started via systemd socket
 activation, so the socket file and its permissions are always controlled by
 the socket unit.
 
@@ -97,7 +97,7 @@ $ curl -i --tlsv1.3 \
 
 ## Scripts
 
-Each script lives in its own folder inside the task-helper's `-scripts-dir`
+Each script lives in its own folder inside remote-runner-execd's `-scripts-dir`
 and must be an executable regular file (no symlinks) named after the folder.
 Scripts run **as root**, so the directory must be owned and only writable by
 root:
@@ -180,11 +180,11 @@ $ useradd --system --home-dir /var/lib/remote-runner --create-home \
 $ mkdir -p /var/lib/remote-runner/scripts
 $ chown -R root:root /var/lib/remote-runner/scripts
 $ chmod -R 750 /var/lib/remote-runner/scripts
-$ cp remote-runner task-helper /usr/local/bin
+$ cp remote-runner remote-runner-execd /usr/local/bin
 $ chown root:remote-runner /usr/local/bin/remote-runner
 $ chmod 750 /usr/local/bin/remote-runner
-$ chown root:root /usr/local/bin/task-helper
-$ chmod 700 /usr/local/bin/task-helper
+$ chown root:root /usr/local/bin/remote-runner-execd
+$ chmod 700 /usr/local/bin/remote-runner-execd
 ```
 
 Install the certificates:
@@ -197,14 +197,14 @@ $ chmod 750 /etc/remote-runner
 $ chmod 640 /etc/remote-runner/*
 ```
 
-Then create the task helper socket `/etc/systemd/system/task-helper.socket`:
+Then create the remote-runner-execd socket `/etc/systemd/system/remote-runner-execd.socket`:
 
 ```ini
 [Unit]
-Description=remote-runner - task helper socket
+Description=remote-runner - remote-runner-execd socket
 
 [Socket]
-ListenStream=/run/remote-runner/task.sock
+ListenStream=/run/remote-runner/execd.sock
 SocketUser=root
 SocketGroup=remote-runner
 SocketMode=0660
@@ -213,14 +213,14 @@ SocketMode=0660
 WantedBy=sockets.target
 ```
 
-and `/etc/systemd/system/task-helper.service`:
+and `/etc/systemd/system/remote-runner-execd.service`:
 
 ```ini
 [Unit]
 Description=remote-runner - execute scripts as root for the web daemon
 
 [Service]
-ExecStart=/usr/local/bin/task-helper \
+ExecStart=/usr/local/bin/remote-runner-execd \
     -scripts-dir /var/lib/remote-runner/scripts \
     -allowed-user remote-runner
 Restart=on-failure
@@ -234,16 +234,16 @@ Finally `/etc/systemd/system/remote-runner.service`:
 ```ini
 [Unit]
 Description=remote-runner - run predefined scripts via REST API
-After=network-online.target task-helper.socket
+After=network-online.target remote-runner-execd.socket
 Wants=network-online.target
-Requires=task-helper.socket
+Requires=remote-runner-execd.socket
 
 [Service]
 User=remote-runner
 Group=remote-runner
 ExecStart=/usr/local/bin/remote-runner \
     -listen :8443 \
-    -task-socket /run/remote-runner/task.sock \
+    -execd-socket /run/remote-runner/execd.sock \
     -server-cert /etc/remote-runner/server.crt \
     -server-key /etc/remote-runner/server.key \
     -client-cert /etc/remote-runner/client.crt
@@ -272,7 +272,7 @@ WantedBy=multi-user.target
 
 ```console
 # systemctl daemon-reload
-# systemctl enable --now task-helper.socket remote-runner
+# systemctl enable --now remote-runner-execd.socket remote-runner
 ```
 
 ## Logging
@@ -284,7 +284,7 @@ captures when they run as the services above. View them with:
 $ journalctl -u remote-runner -f                     # follow
 $ journalctl -u remote-runner --since "1 hour ago"
 $ journalctl -u remote-runner -g "security event"    # filter security events
-$ journalctl -u task-helper -f                       # root side: execution
+$ journalctl -u remote-runner-execd -f                       # root side: execution
 ```
 
 Every log line contains a `transaction_id` (UUIDv4) that ties all messages

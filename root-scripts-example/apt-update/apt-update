@@ -1,6 +1,6 @@
 #!/bin/sh
 # Example root task for Debian/Ubuntu: update the system.
-# Install into the task helper's -scripts-dir as root:
+# Install into remote-runner-execd's -scripts-dir as root:
 #   cp -r root-scripts-example/apt-update /var/lib/remote-runner/scripts/
 apt update
 apt upgrade -y

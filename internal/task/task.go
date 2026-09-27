@@ -78,7 +78,7 @@ type Result struct {
 // ExecuteScript runs the executable at scriptPath, collects its output and
 // forwards every chunk to emit (when not nil). The script runs in its own
 // process group. It is terminated when it does not finish within timeout or
-// when ctx is canceled, e.g. when the client of the task helper disappears.
+// when ctx is canceled, e.g. when the client of the remote-runner-execd disappears.
 func ExecuteScript(ctx context.Context, logger *slog.Logger, scriptPath, scriptName string, timeout time.Duration, emit StreamFunc) *Result {
 	logger = logger.With("script_name", scriptName)
 

@@ -1,13 +1,13 @@
 package task
 
-// Request is the single JSON line the web daemon sends to the task helper.
+// Request is the single JSON line the web daemon sends to the remote-runner-execd.
 type Request struct {
 	ScriptName     string `json:"script_name"`
 	ScriptChecksum string `json:"script_checksum"`
 	TimeoutSecs    int    `json:"timeout_seconds"`
 }
 
-// Event types sent from the task helper to the web daemon as NDJSON lines.
+// Event types sent from the remote-runner-execd to the web daemon as NDJSON lines.
 const (
 	EventStarted  = "started"
 	EventStdout   = "stdout"
@@ -20,7 +20,7 @@ const (
 // exhausted; the web daemon maps it to its "denied" response.
 const ReasonBusy = "busy"
 
-// Event is one protocol message from the task helper to the web daemon. Every
+// Event is one protocol message from the remote-runner-execd to the web daemon. Every
 // connection ends with exactly one terminal event (exit or rejected).
 type Event struct {
 	Type     string `json:"type"` // started | stdout | stderr | exit | rejected

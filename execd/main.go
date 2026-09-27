@@ -51,7 +51,7 @@ func (c *config) validate() error {
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("task-helper terminated", "error", err)
+		slog.Error("remote-runner-execd terminated", "error", err)
 		os.Exit(1)
 	}
 }
@@ -80,7 +80,7 @@ func run() error {
 	}
 
 	slots := make(chan struct{}, cfg.MaxConcurrent)
-	logger.Info("task-helper listening",
+	logger.Info("remote-runner-execd listening",
 		"scripts_dir", cfg.ScriptsDir,
 		"allowed_user", cfg.AllowedUser,
 		"max_concurrent", cfg.MaxConcurrent)
